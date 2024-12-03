@@ -1,0 +1,24 @@
+<launch>
+    <!-- Load Gazebo with a custom world -->
+    <include file="$(find gazebo_ros)/launch/empty_world.launch">
+        <arg name="world_name" value="$(find my_worlds)/worlds/turtlebot3_world.world"/>
+    </include>
+
+    <!-- Load robot description -->
+    <param name="robot_description" command="$(find xacro)/xacro --inorder $(find turtlebot3_description)/urdf/turtlebot3_waffle.urdf.xacro" />
+
+    <!-- Joint State Publisher -->
+    <node name="joint_state_publisher" pkg="joint_state_publisher" type="joint_state_publisher" output="screen">
+        <param name="use_gui" value="false" />
+    </node>
+
+    <!-- Robot State Publisher -->
+    <node name="robot_state_publisher" pkg="robot_state_publisher" type="robot_state_publisher" output="screen">
+        <param name="robot_description" command="$(find xacro)/xacro --inorder $(find turtlebot3_description)/urdf/turtlebot3_waffle.urdf.xacro" />
+    </node>
+
+    <!-- Spawn the TurtleBot3 -->
+    <node name="spawn_urdf" pkg="gazebo_ros" type="spawn_model"
+          args="-urdf -model turtlebot3 -param robot_description -x 1.0 -y 1.5 -z 0.1 -R 0 -P 0 -Y 0"
+          output="screen" launch-prefix="bash -c 'sleep 5; $0 $@'"/>
+</launch>

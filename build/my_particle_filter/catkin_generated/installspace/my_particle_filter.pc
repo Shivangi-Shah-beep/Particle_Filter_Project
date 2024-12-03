@@ -1,0 +1,8 @@
+prefix=/home/shivangi_shah/my_project_ws/install
+
+Name: my_particle_filter
+Description: Description of my_particle_filter
+Version: 0.0.0
+Cflags: 
+Libs: -L${prefix}/lib 
+Requires: 
