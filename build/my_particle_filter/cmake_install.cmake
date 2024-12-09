@@ -52,3 +52,11 @@ if("x${CMAKE_INSTALL_COMPONENT}x" STREQUAL "xUnspecifiedx" OR NOT CMAKE_INSTALL_
   file(INSTALL DESTINATION "${CMAKE_INSTALL_PREFIX}/share/my_particle_filter" TYPE FILE FILES "/home/shivangi_shah/my_project_ws/src/my_particle_filter/package.xml")
 endif()
 
+if("x${CMAKE_INSTALL_COMPONENT}x" STREQUAL "xUnspecifiedx" OR NOT CMAKE_INSTALL_COMPONENT)
+  file(INSTALL DESTINATION "${CMAKE_INSTALL_PREFIX}/lib/my_particle_filter" TYPE PROGRAM FILES "/home/shivangi_shah/my_project_ws/build/my_particle_filter/catkin_generated/installspace/ground_truth_extractor.py")
+endif()
+
+if("x${CMAKE_INSTALL_COMPONENT}x" STREQUAL "xUnspecifiedx" OR NOT CMAKE_INSTALL_COMPONENT)
+  file(INSTALL DESTINATION "${CMAKE_INSTALL_PREFIX}/lib/my_particle_filter" TYPE PROGRAM FILES "/home/shivangi_shah/my_project_ws/build/my_particle_filter/catkin_generated/installspace/imu_data.py")
+endif()
+

@@ -1,0 +1,3 @@
+<launch>
+ <node pkg="my_particle_filter" type="ground_truth_extractor.py" name="ground_truth_node" output="screen"/>
+</launch>
