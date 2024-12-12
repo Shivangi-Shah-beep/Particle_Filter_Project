@@ -36,7 +36,7 @@ class GroundTruthNode:
         # Create PoseStamped message
         pose_stamped = PoseStamped()
         pose_stamped.header.stamp = rospy.Time.now()
-        pose_stamped.header.frame_id = "odom"
+        pose_stamped.header.frame_id = "map"
         pose_stamped.pose = pose
 
         # Create TwistStamped message
@@ -52,7 +52,7 @@ class GroundTruthNode:
         rospy.loginfo(pose)
         rospy.loginfo(twist)
 
-        # Log the linear.x value and timestamp to file    
+          
 
     
 def main():

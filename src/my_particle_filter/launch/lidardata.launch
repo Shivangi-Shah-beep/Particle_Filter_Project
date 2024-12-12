@@ -1,0 +1,4 @@
+<launch>
+  <!-- LIDAR Node -->
+  <node pkg="my_particle_filter" type="lidardata.py" name="lidardata_node" output="screen" />
+</launch>

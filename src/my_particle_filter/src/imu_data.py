@@ -1,81 +1,122 @@
-import math
+#!/usr/bin/env python3
+
 import rospy
+import tf
+import numpy as np
+from geometry_msgs.msg import PoseStamped
 from sensor_msgs.msg import Imu
 from nav_msgs.msg import Odometry
 import message_filters
 
-
-class ImuandOdom():
+class PosePredictor:
     def __init__(self):
-        # Subscribing to IMU and Odometry topics
-        imu_sub = message_filters.Subscriber('/imu', Imu, queue_size=10)
-        odom_sub = message_filters.Subscriber('/odom', Odometry, queue_size=10)
+        # Subscribers
+        imu_sub=message_filters.Subscriber('/imu', Imu)
+        odom_sub=message_filters.Subscriber('/odom', Odometry)
 
-        # Synchronize IMU and Odometry messages
         ts = message_filters.ApproximateTimeSynchronizer([imu_sub, odom_sub], queue_size=10, slop=0.1)
         ts.registerCallback(self.callback)
 
-        # Initialize variables
-        self.x = 0.0
-        self.y = 0.0
-        self.theta = 0.0
-        self.v_x = 0.0  # Linear velocity in X
-        self.v_y = 0.0  # Linear velocity in Y
-        self.last_time = rospy.Time.now()
+        # Publisher for predicted pose
+        self.predicted_pose_pub = rospy.Publisher('/predicted_pose', PoseStamped, queue_size=10)
+
+        # Current state
+        self.last_time = None  # Last timestamp for integration
+        self.predicted_pose = None  # Predicted pose (for publishing or debugging)
+        self.odom_linear_velocity = None  # Linear velocity from odometry
+        self.current_orientation = None  # Orientation from IMU
 
     def callback(self, imu_msg, odom_msg):
-        # Extract angular velocity from IMU (z-axis)
-        #ang_vel = imu_msg.angular_velocity.z
-        if imu_msg.angular_velocity.z==0:
-            ang_vel= odom_msg.twist.twist.angular.z
-            rospy.loginfo(f"The odometry angular velocity which was used is {ang_vel}")
-        else:
-            ang_vel = imu_msg.angular_velocity.z
-            rospy.loginfo("Imu velocity is being used")
-        # Extract linear acceleration from IMU
-        accel_x = imu_msg.linear_acceleration.x
-        accel_y = imu_msg.linear_acceleration.y
+        # Extract linear velocity from odometry
+        self.odom_linear_velocity = np.array([
+            odom_msg.twist.twist.linear.x,
+            odom_msg.twist.twist.linear.y,
+            
+        ])
+        rospy.loginfo(f"Odometry linear velocity: {self.odom_linear_velocity}")
 
-        # Extract linear velocity from odometry (fallback)
-        odom_linear_vel = odom_msg.twist.twist.linear.x
+        if self.odom_linear_velocity is None:
+            rospy.logwarn("Odometry linear velocity not available yet.")
+            return
 
-        # Calculate time difference
-        current_time = rospy.Time.now()
-        delta_t = (current_time - self.last_time).to_sec()
+        # Extract the timestamp
+        current_time = imu_msg.header.stamp.to_sec()
+        if self.last_time is None:
+            self.last_time = current_time
+            return
+
+        delta_t = current_time - self.last_time
         self.last_time = current_time
 
-        # Update velocity using acceleration
-        self.v_x += accel_x * delta_t
-        self.v_y += accel_y * delta_t
+        # Extract IMU data
+        angular_velocity_z = imu_msg.angular_velocity.z  # Angular velocity around Z-axis
 
-        # Use odometry linear velocity if IMU acceleration is unreliable
-        if accel_x == 0.0 and accel_y == 0.0:
-            self.v_x = odom_linear_vel
-            self.v_y = 0.0  
+        # Update pose using motion model
+        self.predicted_pose = self.update_pose(angular_velocity_z, delta_t)
 
-        # Update pose using the motion model
-        self.update_pose(self.v_x, self.v_y, ang_vel, delta_t)
+        # Publish the predicted pose
+        self.publish_predicted_pose()
 
-    def update_pose(self, v_x, v_y, ang_vel, delta_t):
-        # Apply motion model equations
-        self.x += v_x * math.cos(self.theta) * delta_t - v_y * math.sin(self.theta) * delta_t
-        self.y += v_x * math.sin(self.theta) * delta_t + v_y * math.cos(self.theta) * delta_t
-        self.theta += ang_vel * delta_t
+    def update_pose(self, angular_velocity_z, delta_t):
+        # Initialize predicted pose if not already done
+        if self.predicted_pose is None:
+            self.predicted_pose = PoseStamped()
+            self.predicted_pose.header.frame_id = "map"
+            self.predicted_pose.pose.position.x = 0.0
+            self.predicted_pose.pose.position.y = 0.0
+            self.predicted_pose.pose.orientation.w = 1.0
 
-        # Normalize theta to [-pi, pi]
-        self.theta = (self.theta + math.pi) % (2 * math.pi) - math.pi
+        # Extract current pose and orientation
+        x = self.predicted_pose.pose.position.x
+        y = self.predicted_pose.pose.position.y
 
-        # Log updated pose
-        rospy.loginfo(f"Updated Pose: x={self.x}, y={self.y}, theta={self.theta}")
+        quaternion = [
+            self.predicted_pose.pose.orientation.x,
+            self.predicted_pose.pose.orientation.y,
+            self.predicted_pose.pose.orientation.z,
+            self.predicted_pose.pose.orientation.w
+        ]
+        _, _, theta = tf.transformations.euler_from_quaternion(quaternion)
+
+        # Integrate angular velocity to update orientation
+        theta += angular_velocity_z * delta_t
+
+        # Use odometry linear velocity for position update
+        velocity_x = self.odom_linear_velocity[0]
+        velocity_y = self.odom_linear_velocity[1]
+        x += velocity_x * delta_t
+        y += velocity_y * delta_t
+
+        # Convert updated theta back to quaternion
+        updated_quaternion = tf.transformations.quaternion_from_euler(0, 0, theta)
+
+        # Create and return updated pose
+        predicted_pose = PoseStamped()
+        predicted_pose.header.stamp = rospy.Time.now()
+        predicted_pose.header.frame_id = "map"
+        predicted_pose.pose.position.x = x
+        predicted_pose.pose.position.y = y
+        predicted_pose.pose.position.z = 0  # Keep Z constant
+        predicted_pose.pose.orientation.x = updated_quaternion[0]
+        predicted_pose.pose.orientation.y = updated_quaternion[1]
+        predicted_pose.pose.orientation.z = updated_quaternion[2]
+        predicted_pose.pose.orientation.w = updated_quaternion[3]
+
+        return predicted_pose
+
+    def publish_predicted_pose(self):
+        if self.predicted_pose:
+            self.predicted_pose_pub.publish(self.predicted_pose)
+            rospy.loginfo(f"Published predicted pose: {self.predicted_pose.pose}")
 
 
 def main():
-    rospy.init_node('extract_imu_data_with_acceleration', anonymous=True)
-    node = ImuandOdom()
+    rospy.init_node('pose_predictor', anonymous=True)
+    node = PosePredictor()
     rospy.spin()
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     try:
         main()
     except rospy.ROSInterruptException:

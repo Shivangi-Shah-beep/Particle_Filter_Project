@@ -165,6 +165,10 @@ include_directories(
 catkin_install_python(PROGRAMS
  src/ground_truth_extractor.py
  src/imu_data.py
+ src/lidardata.py
+ src/lidar_map.py
+ src/generate_particles.py
+ src/bag_to_csv.py
  DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
  )
 
