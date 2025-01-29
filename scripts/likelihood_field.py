@@ -1,80 +1,89 @@
-import rospy
-from nav_msgs.msg import OccupancyGrid
-from sklearn.neighbors import KDTree
-import numpy as np
+#!/usr/bin/env python3
 
+import rospy
+from nav_msgs.srv import GetMap
+import numpy as np
+from sklearn.neighbors import NearestNeighbors
 
 class LikelihoodField:
     def __init__(self):
-        rospy.Subscriber('/map', OccupancyGrid, self.map_callback, queue_size=1)
-        self.occupied_cells = []  # Stores coordinates of occupied cells
-        self.kd_tree = None  # KD-Tree for occupied cells
-        self.resolution = None  # Map resolution
-        self.origin_x = None  # Map origin X
-        self.origin_y = None  # Map origin Y
-        self.map_width = None  # Map width in grid cells
-        self.map_height = None  # Map height in grid cells
+        # Wait for the map service and fetch the map
+        rospy.wait_for_service("static_map")
+        static_map_service = rospy.ServiceProxy("static_map", GetMap)
+        self.map = static_map_service().map
 
-    def map_callback(self, msg):
-        # Extract map dimensions and data
-        self.map_height = msg.info.height
-        self.map_width = msg.info.width
-        data = msg.data
-        self.resolution = msg.info.resolution
-        self.origin_x = msg.info.origin.position.x
-        self.origin_y = msg.info.origin.position.y
+        # Extract map dimensions and resolution
+        width = self.map.info.width
+        height = self.map.info.height
+        resolution = self.map.info.resolution
 
-        # Identify and store occupied cells
-        self.occupied_cells = self.occupied(data, self.map_width)
+        # Generate grid cell coordinates
+        all_cells = np.zeros((width * height, 2))
+        occupied_cells = []
 
-        if len(self.occupied_cells) == 0:
-            rospy.logwarn("No occupied cells found. Likelihood field may not work as expected.")
-            return
+        idx = 0
+        for x in range(width):
+            for y in range(height):
+                # Compute linear index for the occupancy grid
+                grid_index = x + y * width
+                all_cells[idx] = [float(x), float(y)]
+                # Check if the cell is occupied
+                if self.map.data[grid_index] > 0:
+                    occupied_cells.append([float(x), float(y)])
+                idx += 1
 
-        # Build the KD-Tree
-        self.build_kd_tree()
+        # Convert occupied cells to a NumPy array
+        occupied_cells = np.array(occupied_cells)
 
-    def occupied(self, data, width):
-        occupied = []
-        for index in range(len(data)):
-            if data[index] > 0:  # Cell is occupied
-                x = index % width
-                y = index // width
-                occupied.append((x, y))
-        return occupied
+        # Use NearestNeighbors to compute distances from all cells to the nearest obstacle
+        nearest_neighbors = NearestNeighbors(n_neighbors=1, algorithm="ball_tree").fit(occupied_cells)
+        distances, _ = nearest_neighbors.kneighbors(all_cells)
 
-    def build_kd_tree(self):
-        if len(self.occupied_cells) == 0:
-            rospy.logwarn("No occupied cells found. KD-Tree not built.")
-            return
+        # Populate the closest obstacle distance array
+        self.closest_occ = np.zeros((width, height))
+        idx = 0
+        for x in range(width):
+            for y in range(height):
+                self.closest_occ[x, y] = distances[idx][0] * resolution
+                idx += 1
 
-        occupied_array = np.array(self.occupied_cells)
-        self.kd_tree = KDTree(occupied_array, metric='euclidean')
-        rospy.loginfo("KD-Tree built successfully.")
+        # Store occupied cell coordinates for additional computations
+        self.occupied_cells = occupied_cells
 
-    def query_kd_tree(self, x, y):
-        if self.kd_tree is None:
-            rospy.logwarn("KD-Tree not initialized. Returning NaN.")
-            return float('nan')
+    def get_bounding_box(self):
+        lower_bounds = self.occupied_cells.min(axis=0)
+        upper_bounds = self.occupied_cells.max(axis=0)
+        res = self.map.info.resolution
+        origin = self.map.info.origin.position
+        return (
+            (lower_bounds[0] * res + origin.x, upper_bounds[0] * res + origin.x),
+            (lower_bounds[1] * res + origin.y, upper_bounds[1] * res + origin.y)
+        )
 
-        if x < 0 or x >= self.map_width or y < 0 or y >= self.map_height:
-            rospy.logwarn(f"Point ({x}, {y}) is out of bounds.")
-            return float('nan')
+    def get_closest_obstacle_distance(self, x, y):
+        res = self.map.info.resolution
+        origin = self.map.info.origin.position
 
-        query_point = np.array([[x, y]])
-        distance, _ = self.kd_tree.query(query_point, k=1)
-        return distance[0][0] * self.resolution
+        # Convert world coordinates to grid indices
+        grid_x = (x - origin.x) / res
+        grid_y = (y - origin.y) / res
 
-    def get_closest_obstacle_distance(self, world_x, world_y):
-        grid_x, grid_y = self.world_to_grid(world_x, world_y)
-        return self.query_kd_tree(grid_x, grid_y)
+        # Handle single coordinate or arrays
+        if isinstance(x, np.ndarray):
+            grid_x = grid_x.astype(int)
+            grid_y = grid_y.astype(int)
+        else:
+            grid_x = int(grid_x)
+            grid_y = int(grid_y)
 
-    def world_to_grid(self, world_x, world_y):
-        grid_x = int((world_x - self.origin_x) / self.resolution)
-        grid_y = int((world_y - self.origin_y) / self.resolution)
-        return grid_x, grid_y
-
-    def grid_to_world(self, grid_x, grid_y):
-        world_x = grid_x * self.resolution + self.origin_x
-        world_y = grid_y * self.resolution + self.origin_y
-        return world_x, world_y
+        # Check bounds
+        if isinstance(x, np.ndarray):
+            valid_mask = (grid_x >= 0) & (grid_y >= 0) & (grid_x < self.map.info.width) & (grid_y < self.map.info.height)
+            distances = np.full_like(grid_x, float("nan"), dtype=float)
+            distances[valid_mask] = self.closest_occ[grid_x[valid_mask], grid_y[valid_mask]]
+            return distances
+        else:
+            if 0 <= grid_x < self.map.info.width and 0 <= grid_y < self.map.info.height:
+                return self.closest_occ[grid_x, grid_y]
+            else:
+                return float("nan")
